@@ -12,9 +12,8 @@
       b.style.background = "#c0392b"; b.style.display = "block";
     };
   </script>
-  <!-- ① YOUR_CLIENT_ID 를 네이버 Client ID로 바꾸세요 -->
+  <!-- ① YOUR_CLIENT_ID → 네이버 Client ID -->
   <script src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=e81jlmya8c&submodules=panorama"></script>
-  <!-- Supabase 라이브러리 -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; }
@@ -41,10 +40,10 @@
     #actBtn:disabled { background:#94a3b8; cursor:default; }
     .overlay { position:fixed; inset:0; z-index:50; display:flex; flex-direction:column;
       align-items:center; justify-content:center; padding:24px; text-align:center;
-      background:rgba(15,23,42,.94); color:#fff; }
+      background:rgba(15,23,42,.94); color:#fff; overflow-y:auto; }
     .card { width:100%; max-width:420px; }
     .card h1 { margin:0 0 4px; font-size:28px; }
-    .card p { margin:0 0 18px; color:#cbd5e1; font-size:14px; }
+    .card p { margin:0 0 16px; color:#cbd5e1; font-size:14px; }
     .seg { display:flex; gap:6px; background:rgba(255,255,255,.08); padding:5px;
       border-radius:12px; margin-bottom:12px; }
     .seg button { flex:1; padding:11px; border:0; border-radius:9px; cursor:pointer;
@@ -54,12 +53,14 @@
     .bigBtn { width:100%; padding:15px; border:0; border-radius:12px; cursor:pointer;
       background:#22c55e; color:#08301a; font-size:18px; font-weight:800; }
     .bigBtn:disabled { background:#94a3b8; color:#eee; cursor:default; }
+    .linkBtn { margin-top:10px; background:transparent; border:0; color:#93c5fd; cursor:pointer;
+      font-size:14px; text-decoration:underline; }
     .credit { margin-top:14px; font-size:11px; color:#64748b; }
-    #final .total { font-size:46px; font-weight:800; color:#fbbf24; margin:6px 0 14px; }
-    #final ul { list-style:none; padding:0; margin:0 0 16px; width:100%; }
-    #final li { display:flex; justify-content:space-between; padding:8px 12px;
+    .rlist { list-style:none; padding:0; margin:0 0 16px; width:100%; }
+    .rlist li { display:flex; justify-content:space-between; padding:9px 12px;
       border-bottom:1px solid rgba(255,255,255,.12); font-size:15px; }
-    #final li .d { color:#94a3b8; font-size:13px; }
+    .rlist li .d { color:#94a3b8; font-size:13px; }
+    #finalTotal { font-size:46px; font-weight:800; color:#fbbf24; margin:6px 0 14px; }
     @media (max-width:640px){ .pill{ font-size:13px; padding:7px 11px; } }
   </style>
 </head>
@@ -77,6 +78,7 @@
     <button id="actBtn" disabled>찾는 중…</button>
   </div>
 
+  <!-- 시작 화면 -->
   <div id="start" class="overlay">
     <div class="card">
       <h1>🗺️ 한국 어디게임</h1>
@@ -88,36 +90,51 @@
       </div>
       <select id="provSel" style="display:none"></select>
       <select id="muniSel" style="display:none"></select>
-      <button id="startBtn" class="bigBtn">불러오는 중…</button>
+      <button id="practiceBtn" class="bigBtn" disabled>불러오는 중…</button>
+      <button id="rankedBtn" class="bigBtn" style="background:#2563eb;color:#fff;margin-top:8px" disabled>🏆 랭킹 도전 (하루 1회)</button>
+      <button id="boardBtn" class="linkBtn">📊 이번 주 랭킹 보기</button>
+      <div id="startMsg" style="margin-top:10px;color:#fbbf24;font-size:13px;min-height:16px"></div>
       <div class="credit">행정경계 데이터: 통계청(KOSTAT) · southkorea-maps (CC BY 4.0)</div>
     </div>
   </div>
 
+  <!-- 최종 화면 -->
   <div id="final" class="overlay" style="display:none">
     <div class="card">
       <h1>🏁 게임 끝!</h1>
-      <div class="total" id="finalTotal">0</div>
-      <ul id="finalList"></ul>
+      <div id="finalTotal">0</div>
+      <ul id="finalList" class="rlist"></ul>
       <input id="nickInput" placeholder="닉네임 (최대 20자)" maxlength="20" />
       <button id="submitBtn" class="bigBtn" style="background:#2563eb;color:#fff;margin-bottom:8px">🏆 랭킹에 등록</button>
+      <div id="practiceNote" style="display:none;color:#cbd5e1;font-size:13px;margin-bottom:12px">연습 모드 — 점수는 저장되지 않아요.</div>
       <div id="submitMsg" style="font-size:13px;color:#cbd5e1;min-height:18px;margin-bottom:12px"></div>
+      <button id="finalBoardBtn" class="bigBtn" style="background:#334155;color:#fff;margin-bottom:8px">📊 이번 주 랭킹 보기</button>
       <button id="againBtn" class="bigBtn">지역 다시 고르기</button>
+    </div>
+  </div>
+
+  <!-- 리더보드 화면 -->
+  <div id="board" class="overlay" style="display:none">
+    <div class="card">
+      <h1>🏆 이번 주 랭킹</h1>
+      <p id="boardSub">전국</p>
+      <ol id="boardList" class="rlist"></ol>
+      <button id="boardCloseBtn" class="bigBtn">돌아가기</button>
     </div>
   </div>
 
   <script>
     // ===== 게임 설정 =====
     var ROUNDS_TOTAL=7, MAX_SCORE=5000, FULL_RADIUS_KM=0.5, SHARPNESS=5, TRIES_MAX=80;
-    var CUTOFF_FRAC=0.7;
-    var cutoffKm=250;
+    var CUTOFF_FRAC=0.7, cutoffKm=250;
 
-    // ===== ② Supabase 연결: 아래 두 값을 내 것으로 바꾸세요 =====
+    // ===== ② Supabase: 아래 두 값을 내 것으로 =====
     var SUPABASE_URL = "https://oimlnjlecmukjjdgaybz.supabase.co";
     var SUPABASE_KEY = "sb_publishable_AW7KZXMx3_5VtG02YSHzfw_-CUevn70";
-    // =====================================================
+    // ============================================
     var sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    var DATA=null, activeFeatures=[], activeBBox=null, activeName="전국";
+    var DATA=null, activeFeatures=[], activeBBox=null, activeName="전국", gameMode="practice";
     var roundPill=document.getElementById("roundPill"), scorePill=document.getElementById("scorePill");
     var msg=document.getElementById("msg"), act=document.getElementById("actBtn");
     var round=0, total=0, results=[], tries=0, phase="IDLE";
@@ -125,8 +142,7 @@
 
     function fmtNum(n){ return n.toLocaleString("ko-KR"); }
     function fmtDist(km){ return km<1 ? Math.round(km*1000)+"m" : km.toFixed(1)+"km"; }
-
-    // ISO 주차 → "2026-W29"
+    function escapeHtml(s){ return String(s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
     function isoWeek(d){
       d=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
       var day=d.getUTCDay()||7; d.setUTCDate(d.getUTCDate()+4-day);
@@ -134,6 +150,9 @@
       var w=Math.ceil((((d-ys)/86400000)+1)/7);
       return d.getUTCFullYear()+"-W"+String(w).padStart(2,"0");
     }
+    function todayStr(){ var d=new Date(); return d.getFullYear()+"-"+(d.getMonth()+1)+"-"+d.getDate(); }
+    function rankedUsedToday(){ try{ return localStorage.getItem("lastRankedDate")===todayStr(); }catch(e){ return false; } }
+    function markRankedToday(){ try{ localStorage.setItem("lastRankedDate",todayStr()); }catch(e){} }
 
     function pointInGeom(lng,lat,geom){
       function inPoly(poly){
@@ -197,7 +216,6 @@
       [guessMarker,answerMarker,line].forEach(function(o){ if(o) o.setMap(null); });
       guessMarker=answerMarker=line=null;
     }
-
     var pano=new naver.maps.Panorama("pano",{ position:new naver.maps.LatLng(37.57,126.98), pov:{pan:0,tilt:0,fov:100} });
 
     function regionBounds(){
@@ -208,8 +226,7 @@
     function beginSearch(){
       phase="SEARCHING"; tries=0; clearOverlays(); guessLatLng=null; answerCoord=null;
       guessMap.fitBounds(regionBounds());
-      msg.style.display="none";
-      act.disabled=true; act.textContent="찾는 중…";
+      msg.style.display="none"; act.disabled=true; act.textContent="찾는 중…";
       roundPill.textContent=activeName+" · 라운드 "+round+" / "+ROUNDS_TOTAL;
       tryFind();
     }
@@ -227,8 +244,7 @@
       guessMap.fitBounds(new naver.maps.LatLngBounds(guessLatLng,answerCoord));
       scorePill.textContent="총점 "+fmtNum(total);
       msg.style.background="#27ae60";
-      msg.textContent="📏 "+fmtDist(km)+" · ⭐ "+fmtNum(sc)+"점 · "+where;
-      msg.style.display="block";
+      msg.textContent="📏 "+fmtDist(km)+" · ⭐ "+fmtNum(sc)+"점 · "+where; msg.style.display="block";
       phase="REVEALED"; act.disabled=false;
       act.textContent=(round>=ROUNDS_TOTAL)?"🏁 최종 결과":"다음 라운드 →";
     }
@@ -241,30 +257,85 @@
         li.innerHTML="<b>R"+(i+1)+"</b> <span>"+fmtNum(r.score)+"점 <span class='d'>("+fmtDist(r.km)+")</span></span>";
         ul.appendChild(li);
       });
+      var ranked=(gameMode==="ranked");
+      document.getElementById("nickInput").style.display=ranked?"block":"none";
+      document.getElementById("submitBtn").style.display=ranked?"block":"none";
+      document.getElementById("practiceNote").style.display=ranked?"none":"block";
       document.getElementById("submitMsg").textContent="";
       document.getElementById("submitBtn").disabled=false;
       document.getElementById("final").style.display="flex";
     }
-    function startGame(){
+
+    function resolveRegion(){
+      if(level==="all"){ activeFeatures=DATA.municipalities; activeName="전국"; }
+      else if(level==="sido"){
+        activeFeatures=DATA.municipalities.filter(function(m){return m.pcode===provSel.value;});
+        activeName=provSel.options[provSel.selectedIndex].text;
+      } else {
+        var c=muniSel.value;
+        activeFeatures=DATA.municipalities.filter(function(m){return m.code===c;});
+        activeName=provSel.options[provSel.selectedIndex].text+" "+muniSel.options[muniSel.selectedIndex].text;
+      }
+      activeBBox=combinedBBox(activeFeatures);
+      var sw=new naver.maps.LatLng(activeBBox[1],activeBBox[0]);
+      var ne=new naver.maps.LatLng(activeBBox[3],activeBBox[2]);
+      cutoffKm=Math.max(3, haversineKm(sw,ne)*CUTOFF_FRAC);
+    }
+    function beginGame(mode){
+      if(!DATA) return;
+      if(mode==="ranked" && rankedUsedToday()){
+        document.getElementById("startMsg").textContent="오늘은 이미 랭킹에 도전했어요. 내일 다시! (연습은 무제한)";
+        return;
+      }
+      if(mode==="ranked") markRankedToday();
+      gameMode=mode; resolveRegion();
       round=0; total=0; results=[]; scorePill.textContent="총점 0";
+      document.getElementById("startMsg").textContent="";
       document.getElementById("final").style.display="none";
+      document.getElementById("board").style.display="none";
       document.getElementById("start").style.display="none";
       nextRound();
     }
 
-    // ===== 점수 저장 =====
     function submitScore(){
       var nick=document.getElementById("nickInput").value.trim();
       var st=document.getElementById("submitMsg");
       if(nick.length<1){ st.textContent="닉네임을 입력하세요."; return; }
-      var btn=document.getElementById("submitBtn");
-      btn.disabled=true; st.textContent="저장 중…";
+      var btn=document.getElementById("submitBtn"); btn.disabled=true; st.textContent="저장 중…";
       sb.from("scores").insert({
         nickname:nick, score:total, scope:level, region:activeName, week:isoWeek(new Date())
       }).then(function(res){
         if(res.error){ st.textContent="저장 실패: "+res.error.message; btn.disabled=false; console.error(res.error); }
-        else { st.textContent="✅ 등록 완료! ("+activeName+" · "+isoWeek(new Date())+")"; }
+        else { st.textContent="✅ 등록 완료! 아래 '이번 주 랭킹'에서 순위를 확인하세요."; }
       });
+    }
+
+    function showBoard(){
+      if(!DATA) return;
+      resolveRegion();
+      var wk=isoWeek(new Date());
+      document.getElementById("boardSub").textContent=activeName+" · "+wk;
+      var ol=document.getElementById("boardList");
+      ol.innerHTML="<li style='color:#94a3b8'>불러오는 중…</li>";
+      document.getElementById("start").style.display="none";
+      document.getElementById("final").style.display="none";
+      document.getElementById("board").style.display="flex";
+      sb.from("scores").select("nickname,score")
+        .eq("week",wk).eq("scope",level).eq("region",activeName)
+        .order("score",{ascending:false}).limit(50)
+        .then(function(res){
+          if(res.error){ ol.innerHTML="<li style='color:#fca5a5'>불러오기 실패: "+res.error.message+"</li>"; return; }
+          var rows=res.data||[];
+          if(!rows.length){ ol.innerHTML="<li style='color:#94a3b8'>아직 등록된 점수가 없어요. 첫 주자가 되어보세요!</li>"; return; }
+          ol.innerHTML="";
+          rows.forEach(function(row,i){
+            var medal=i===0?"🥇":i===1?"🥈":i===2?"🥉":(i+1)+".";
+            var li=document.createElement("li");
+            li.innerHTML="<span><b style='display:inline-block;width:34px'>"+medal+"</b> "+escapeHtml(row.nickname)+
+                         "</span><b style='color:#fbbf24'>"+fmtNum(row.score)+"</b>";
+            ol.appendChild(li);
+          });
+        });
     }
 
     naver.maps.Event.addListener(pano,"pano_status",function(status){
@@ -291,12 +362,18 @@
       setTimeout(function(){ window.dispatchEvent(new Event("resize")); },220);
     });
     document.getElementById("submitBtn").addEventListener("click",submitScore);
+    document.getElementById("finalBoardBtn").addEventListener("click",showBoard);
+    document.getElementById("boardBtn").addEventListener("click",showBoard);
+    document.getElementById("boardCloseBtn").addEventListener("click",function(){
+      document.getElementById("board").style.display="none";
+      document.getElementById("start").style.display="flex";
+    });
     document.getElementById("againBtn").addEventListener("click",function(){
       document.getElementById("final").style.display="none";
       document.getElementById("start").style.display="flex";
     });
 
-    // ===== 시작 화면 =====
+    // 시작 화면 지역 선택
     var level="all", provSel=document.getElementById("provSel"), muniSel=document.getElementById("muniSel");
     document.getElementById("seg").addEventListener("click",function(e){
       if(e.target.tagName!=="BUTTON") return;
@@ -312,29 +389,16 @@
       DATA.municipalities.filter(function(m){return m.pcode===pc;})
         .forEach(function(m){ var o=document.createElement("option"); o.value=m.code; o.textContent=m.name; muniSel.appendChild(o); });
     }
-    document.getElementById("startBtn").addEventListener("click",function(){
-      if(!DATA) return;
-      if(level==="all"){ activeFeatures=DATA.municipalities; activeName="전국"; }
-      else if(level==="sido"){
-        activeFeatures=DATA.municipalities.filter(function(m){return m.pcode===provSel.value;});
-        activeName=provSel.options[provSel.selectedIndex].text;
-      } else {
-        var c=muniSel.value; activeFeatures=DATA.municipalities.filter(function(m){return m.code===c;});
-        activeName=muniSel.options[muniSel.selectedIndex].text;
-      }
-      activeBBox=combinedBBox(activeFeatures);
-      var sw=new naver.maps.LatLng(activeBBox[1],activeBBox[0]);
-      var ne=new naver.maps.LatLng(activeBBox[3],activeBBox[2]);
-      cutoffKm=Math.max(3, haversineKm(sw,ne)*CUTOFF_FRAC);
-      startGame();
-    });
+    document.getElementById("practiceBtn").addEventListener("click",function(){ beginGame("practice"); });
+    document.getElementById("rankedBtn").addEventListener("click",function(){ beginGame("ranked"); });
 
     fetch("regions.json").then(function(r){return r.json();}).then(function(d){
       DATA=d;
       d.provinces.forEach(function(p){ var o=document.createElement("option"); o.value=p.code; o.textContent=p.name; provSel.appendChild(o); });
-      document.getElementById("startBtn").textContent="게임 시작 ▶";
+      var pb=document.getElementById("practiceBtn"); pb.textContent="🎮 연습 시작"; pb.disabled=false;
+      document.getElementById("rankedBtn").disabled=false;
     }).catch(function(err){
-      document.getElementById("startBtn").textContent="⚠️ 오류: "+err.message;
+      document.getElementById("practiceBtn").textContent="⚠️ 오류: "+err.message;
       console.error("regions.json 로드 실패:", err);
     });
   </script>
