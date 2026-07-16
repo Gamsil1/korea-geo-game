@@ -12,8 +12,10 @@
       b.style.background = "#c0392b"; b.style.display = "block";
     };
   </script>
-  <!-- ▼▼▼ YOUR_CLIENT_ID 를 내 Client ID로 바꾸세요 ▼▼▼ -->
+  <!-- ① YOUR_CLIENT_ID 를 네이버 Client ID로 바꾸세요 -->
   <script src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=e81jlmya8c&submodules=panorama"></script>
+  <!-- Supabase 라이브러리 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     * { box-sizing: border-box; }
     html, body { margin:0; height:100%; font-family:-apple-system,"Malgun Gothic",sans-serif; }
@@ -37,7 +39,6 @@
       background:#2563eb; color:#fff; font-size:16px; font-weight:bold; cursor:pointer;
       box-shadow:0 2px 8px rgba(0,0,0,.35); }
     #actBtn:disabled { background:#94a3b8; cursor:default; }
-    /* 시작/최종 오버레이 */
     .overlay { position:fixed; inset:0; z-index:50; display:flex; flex-direction:column;
       align-items:center; justify-content:center; padding:24px; text-align:center;
       background:rgba(15,23,42,.94); color:#fff; }
@@ -49,13 +50,13 @@
     .seg button { flex:1; padding:11px; border:0; border-radius:9px; cursor:pointer;
       background:transparent; color:#cbd5e1; font-size:15px; font-weight:bold; }
     .seg button.on { background:#2563eb; color:#fff; }
-    select { width:100%; padding:12px; margin-bottom:10px; border-radius:10px; border:0;
-      font-size:16px; }
+    select, #nickInput { width:100%; padding:12px; margin-bottom:10px; border-radius:10px; border:0; font-size:16px; }
     .bigBtn { width:100%; padding:15px; border:0; border-radius:12px; cursor:pointer;
       background:#22c55e; color:#08301a; font-size:18px; font-weight:800; }
+    .bigBtn:disabled { background:#94a3b8; color:#eee; cursor:default; }
     .credit { margin-top:14px; font-size:11px; color:#64748b; }
     #final .total { font-size:46px; font-weight:800; color:#fbbf24; margin:6px 0 14px; }
-    #final ul { list-style:none; padding:0; margin:0 0 20px; width:100%; }
+    #final ul { list-style:none; padding:0; margin:0 0 16px; width:100%; }
     #final li { display:flex; justify-content:space-between; padding:8px 12px;
       border-bottom:1px solid rgba(255,255,255,.12); font-size:15px; }
     #final li .d { color:#94a3b8; font-size:13px; }
@@ -76,7 +77,6 @@
     <button id="actBtn" disabled>찾는 중…</button>
   </div>
 
-  <!-- 시작 화면 -->
   <div id="start" class="overlay">
     <div class="card">
       <h1>🗺️ 한국 어디게임</h1>
@@ -93,22 +93,29 @@
     </div>
   </div>
 
-  <!-- 최종 화면 -->
   <div id="final" class="overlay" style="display:none">
     <div class="card">
       <h1>🏁 게임 끝!</h1>
       <div class="total" id="finalTotal">0</div>
       <ul id="finalList"></ul>
+      <input id="nickInput" placeholder="닉네임 (최대 20자)" maxlength="20" />
+      <button id="submitBtn" class="bigBtn" style="background:#2563eb;color:#fff;margin-bottom:8px">🏆 랭킹에 등록</button>
+      <div id="submitMsg" style="font-size:13px;color:#cbd5e1;min-height:18px;margin-bottom:12px"></div>
       <button id="againBtn" class="bigBtn">지역 다시 고르기</button>
     </div>
   </div>
 
   <script>
-    // ===== 조절 가능한 값 =====
+    // ===== 게임 설정 =====
     var ROUNDS_TOTAL=7, MAX_SCORE=5000, FULL_RADIUS_KM=0.5, SHARPNESS=5, TRIES_MAX=80;
-    var CUTOFF_FRAC=0.7;   // 컷오프 = 지역 대각선 × 이 비율 (작을수록 짜게)
-    var cutoffKm=250;      // 지역 고를 때 자동 계산됨 (건드리지 마세요)
-    // =========================
+    var CUTOFF_FRAC=0.7;
+    var cutoffKm=250;
+
+    // ===== ② Supabase 연결: 아래 두 값을 내 것으로 바꾸세요 =====
+    var SUPABASE_URL = "https://oimlnjlecmukjjdgaybz.supabase.co";
+    var SUPABASE_KEY = "sb_publishable_AW7KZXMx3_5VtG02YSHzfw_-CUevn70";
+    // =====================================================
+    var sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     var DATA=null, activeFeatures=[], activeBBox=null, activeName="전국";
     var roundPill=document.getElementById("roundPill"), scorePill=document.getElementById("scorePill");
@@ -119,7 +126,15 @@
     function fmtNum(n){ return n.toLocaleString("ko-KR"); }
     function fmtDist(km){ return km<1 ? Math.round(km*1000)+"m" : km.toFixed(1)+"km"; }
 
-    // 점-다각형 포함 판정 (ray casting)
+    // ISO 주차 → "2026-W29"
+    function isoWeek(d){
+      d=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
+      var day=d.getUTCDay()||7; d.setUTCDate(d.getUTCDate()+4-day);
+      var ys=new Date(Date.UTC(d.getUTCFullYear(),0,1));
+      var w=Math.ceil((((d-ys)/86400000)+1)/7);
+      return d.getUTCFullYear()+"-W"+String(w).padStart(2,"0");
+    }
+
     function pointInGeom(lng,lat,geom){
       function inPoly(poly){
         var inside=false;
@@ -144,7 +159,6 @@
       });
       return b;
     }
-    // 선택 지역 경계 안에서 무작위 좌표
     function randomInRegion(){
       for(var t=0;t<500;t++){
         var lng=activeBBox[0]+Math.random()*(activeBBox[2]-activeBBox[0]);
@@ -184,7 +198,6 @@
       guessMarker=answerMarker=line=null;
     }
 
-    // 파노라마는 처음 한 번만 생성(위치는 아무 곳). 게임 시작 전엔 phase=IDLE 이라 무시됨.
     var pano=new naver.maps.Panorama("pano",{ position:new naver.maps.LatLng(37.57,126.98), pov:{pan:0,tilt:0,fov:100} });
 
     function regionBounds(){
@@ -228,6 +241,8 @@
         li.innerHTML="<b>R"+(i+1)+"</b> <span>"+fmtNum(r.score)+"점 <span class='d'>("+fmtDist(r.km)+")</span></span>";
         ul.appendChild(li);
       });
+      document.getElementById("submitMsg").textContent="";
+      document.getElementById("submitBtn").disabled=false;
       document.getElementById("final").style.display="flex";
     }
     function startGame(){
@@ -235,6 +250,21 @@
       document.getElementById("final").style.display="none";
       document.getElementById("start").style.display="none";
       nextRound();
+    }
+
+    // ===== 점수 저장 =====
+    function submitScore(){
+      var nick=document.getElementById("nickInput").value.trim();
+      var st=document.getElementById("submitMsg");
+      if(nick.length<1){ st.textContent="닉네임을 입력하세요."; return; }
+      var btn=document.getElementById("submitBtn");
+      btn.disabled=true; st.textContent="저장 중…";
+      sb.from("scores").insert({
+        nickname:nick, score:total, scope:level, region:activeName, week:isoWeek(new Date())
+      }).then(function(res){
+        if(res.error){ st.textContent="저장 실패: "+res.error.message; btn.disabled=false; console.error(res.error); }
+        else { st.textContent="✅ 등록 완료! ("+activeName+" · "+isoWeek(new Date())+")"; }
+      });
     }
 
     naver.maps.Event.addListener(pano,"pano_status",function(status){
@@ -260,19 +290,20 @@
       this.textContent=p.classList.contains("big")?"⤡ 작게":"⤢ 크게";
       setTimeout(function(){ window.dispatchEvent(new Event("resize")); },220);
     });
+    document.getElementById("submitBtn").addEventListener("click",submitScore);
     document.getElementById("againBtn").addEventListener("click",function(){
       document.getElementById("final").style.display="none";
       document.getElementById("start").style.display="flex";
     });
 
-    // ===== 시작 화면: 지역 선택 =====
+    // ===== 시작 화면 =====
     var level="all", provSel=document.getElementById("provSel"), muniSel=document.getElementById("muniSel");
     document.getElementById("seg").addEventListener("click",function(e){
       if(e.target.tagName!=="BUTTON") return;
       [].forEach.call(this.children,function(b){ b.classList.remove("on"); });
       e.target.classList.add("on"); level=e.target.dataset.lv;
       provSel.style.display=(level==="all")?"none":"block";
-      muniSel.style.display=(level==="sigungu")?"none":"none";
+      muniSel.style.display="none";
       if(level==="sigungu"){ fillMuni(); muniSel.style.display="block"; }
     });
     provSel.addEventListener("change",function(){ if(level==="sigungu") fillMuni(); });
@@ -292,21 +323,19 @@
         activeName=muniSel.options[muniSel.selectedIndex].text;
       }
       activeBBox=combinedBBox(activeFeatures);
-      // 지역 대각선 길이(km)에 맞춰 컷오프 자동 설정
       var sw=new naver.maps.LatLng(activeBBox[1],activeBBox[0]);
       var ne=new naver.maps.LatLng(activeBBox[3],activeBBox[2]);
-      var diagKm=haversineKm(sw,ne);
-      cutoffKm=Math.max(3, diagKm*CUTOFF_FRAC);  // 최소 3km 보장
+      cutoffKm=Math.max(3, haversineKm(sw,ne)*CUTOFF_FRAC);
       startGame();
     });
 
-    // 데이터 불러오기
     fetch("regions.json").then(function(r){return r.json();}).then(function(d){
       DATA=d;
       d.provinces.forEach(function(p){ var o=document.createElement("option"); o.value=p.code; o.textContent=p.name; provSel.appendChild(o); });
-      var sb=document.getElementById("startBtn"); sb.textContent="게임 시작 ▶";
-    }).catch(function(){
-      document.getElementById("startBtn").textContent="⚠️ regions.json 못 찾음";
+      document.getElementById("startBtn").textContent="게임 시작 ▶";
+    }).catch(function(err){
+      document.getElementById("startBtn").textContent="⚠️ 오류: "+err.message;
+      console.error("regions.json 로드 실패:", err);
     });
   </script>
 </body>
