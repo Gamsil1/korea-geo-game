@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>한국 어디게임</title>
+
+  <script>
+    window.navermap_authFailure = function () {
+      var b = document.getElementById("msg");
+      b.textContent = "❌ 인증 실패: Client ID 또는 등록 도메인을 확인하세요.";
+      b.style.background = "#c0392b"; b.style.display = "block";
+    };
+  </script>
+
+  <!-- ▼▼▼ YOUR_CLIENT_ID 를 내 Client ID로 바꾸세요 ▼▼▼ -->
+  <script src="https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=e81jlmya8c&submodules=panorama"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: -apple-system, "Malgun Gothic", sans-serif; }
+    #pano { width: 100%; height: 100vh; background: #111; }
+
+    /* 상단 HUD */
+    #hud {
+      position: fixed; top: 10px; left: 10px; right: 10px; z-index: 30;
+      display: flex; justify-content: space-between; gap: 8px; pointer-events: none;
+    }
+    .pill {
+      background: rgba(17,24,39,.85); color: #fff; padding: 8px 14px;
+      border-radius: 999px; font-size: 15px; font-weight: bold;
+      box-shadow: 0 2px 8px rgba(0,0,0,.3);
+    }
+    /* 가운데 결과 메시지 */
+    #msg {
+      position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
+      z-index: 30; max-width: 92vw; display: none;
+      background: #27ae60; color: #fff; padding: 10px 16px;
+      border-radius: 10px; font-size: 15px; text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,.35);
+    }
+
+    /* 추측 지도 패널 */
+    #panel {
+      position: fixed; right: 10px; bottom: 10px; z-index: 30;
+      width: min(360px, 82vw); transition: width .2s;
+    }
+    #panel.big { width: min(760px, 94vw); }
+    #maptop { display: flex; justify-content: flex-end; margin-bottom: 6px; }
+    #expandBtn {
+      pointer-events: auto; border: 0; cursor: pointer;
+      background: rgba(17,24,39,.85); color: #fff;
+      padding: 6px 10px; border-radius: 8px; font-size: 13px;
+    }
+    #guessMap {
+      width: 100%; height: 230px; border-radius: 12px; overflow: hidden;
+      box-shadow: 0 3px 14px rgba(0,0,0,.45); transition: height .2s;
+    }
+    #panel.big #guessMap { height: min(64vh, 540px); }
+    #actBtn {
+      width: 100%; margin-top: 8px; padding: 13px; border: 0; border-radius: 12px;
+      background: #2563eb; color: #fff; font-size: 16px; font-weight: bold;
+      cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.35);
+    }
+    #actBtn:disabled { background: #94a3b8; cursor: default; }
+
+    /* 최종 결과 오버레이 */
+    #final {
+      position: fixed; inset: 0; z-index: 50; display: none;
+      background: rgba(15,23,42,.94); color: #fff;
+      flex-direction: column; align-items: center; justify-content: center;
+      padding: 24px; text-align: center;
+    }
+    #final h1 { margin: 0 0 4px; font-size: 26px; }
+    #final .total { font-size: 46px; font-weight: 800; color: #fbbf24; margin: 6px 0 14px; }
+    #final ul { list-style: none; padding: 0; margin: 0 0 20px; max-width: 420px; width: 100%; }
+    #final li {
+      display: flex; justify-content: space-between; gap: 12px;
+      padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,.12); font-size: 15px;
+    }
+    #final li span.d { color: #94a3b8; font-size: 13px; }
+    #againBtn {
+      padding: 14px 28px; border: 0; border-radius: 12px; cursor: pointer;
+      background: #22c55e; color: #08301a; font-size: 18px; font-weight: 800;
+    }
+    @media (max-width: 640px) { .pill { font-size: 13px; padding: 7px 11px; } }
+  </style>
+</head>
+<body>
+  <div id="pano"></div>
+
+  <div id="hud">
+    <div class="pill" id="roundPill">라운드 1 / 7</div>
+    <div class="pill" id="scorePill">총점 0</div>
+  </div>
+  <div id="msg"></div>
+
+  <div id="panel">
+    <div id="maptop"><button id="expandBtn">⤢ 크게</button></div>
+    <div id="guessMap"></div>
+    <button id="actBtn" disabled>찾는 중…</button>
+  </div>
+
+  <div id="final">
+    <h1>🏁 게임 끝!</h1>
+    <div class="total" id="finalTotal">0</div>
+    <ul id="finalList"></ul>
+    <button id="againBtn">다시 하기</button>
+  </div>
+
+  <script>
+    // ===== 조절 가능한 값 =====
+    var ROUNDS_TOTAL   = 7;
+    var MAX_SCORE      = 5000;
+    var FULL_RADIUS_KM = 0.5;   // 이 거리 이내면 만점
+    var CUTOFF_KM      = 250;   // 이 거리 이상이면 0점
+    var SHARPNESS      = 5;     // 클수록 "가까울 때만 급상승" (뾰족)
+    var TRIES_MAX      = 60;    // 거리뷰 못 찾을 때 재시도 한도
+    // =========================
+
+    var roundPill = document.getElementById("roundPill");
+    var scorePill = document.getElementById("scorePill");
+    var msg  = document.getElementById("msg");
+    var act  = document.getElementById("actBtn");
+
+    var round = 0, total = 0, results = [];
+    var tries = 0, phase = "SEARCHING";
+    var answerCoord = null, guessLatLng = null;
+    var guessMarker = null, answerMarker = null, line = null;
+
+    function fmtNum(n){ return n.toLocaleString("ko-KR"); }
+    function fmtDist(km){ return km < 1 ? Math.round(km*1000)+"m" : km.toFixed(1)+"km"; }
+
+    function randomKoreaLatLng(){
+      var lat = 34.5 + Math.random()*(38.3-34.5);
+      var lng = 126.4 + Math.random()*(129.3-126.4);
+      return new naver.maps.LatLng(lat, lng);
+    }
+    function haversineKm(a, b){
+      var R=6371, r=Math.PI/180;
+      var dLat=(b.lat()-a.lat())*r, dLng=(b.lng()-a.lng())*r;
+      var la1=a.lat()*r, la2=b.lat()*r;
+      var h=Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLng/2)**2;
+      return 2*R*Math.asin(Math.sqrt(h));
+    }
+    function scoreFor(km){
+      if (km <= FULL_RADIUS_KM) return MAX_SCORE;
+      if (km >= CUTOFF_KM) return 0;
+      var t = (CUTOFF_KM - km) / (CUTOFF_KM - FULL_RADIUS_KM); // 1(가까움)~0(멈)
+      return Math.round(MAX_SCORE * Math.pow(t, SHARPNESS));
+    }
+
+    var guessMap = new naver.maps.Map("guessMap", {
+      center: new naver.maps.LatLng(36.5, 127.8), zoom: 6
+    });
+
+    function labelMarker(pos, text, color){
+      return new naver.maps.Marker({
+        position: pos, map: guessMap,
+        icon: { content:'<div style="transform:translate(-50%,-100%);background:'+color+
+          ';color:#fff;padding:3px 8px;border-radius:8px;font-size:12px;font-weight:bold;'+
+          'white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.5)">'+text+'</div>',
+          anchor: new naver.maps.Point(0,0) }
+      });
+    }
+    function clearOverlays(){
+      [guessMarker, answerMarker, line].forEach(function(o){ if(o) o.setMap(null); });
+      guessMarker = answerMarker = line = null;
+    }
+
+    var pano = new naver.maps.Panorama("pano", {
+      position: randomKoreaLatLng(), pov:{ pan:0, tilt:0, fov:100 }
+    });
+
+    function beginSearch(){
+      phase="SEARCHING"; tries=0;
+      clearOverlays(); guessLatLng=null; answerCoord=null;
+      guessMap.setCenter(new naver.maps.LatLng(36.5,127.8)); guessMap.setZoom(6);
+      msg.style.display="none";
+      act.disabled=true; act.textContent="찾는 중…";
+      roundPill.textContent="라운드 "+round+" / "+ROUNDS_TOTAL;
+      tryFind();
+    }
+    function tryFind(){
+      tries++;
+      act.textContent="찾는 중… ("+tries+")";
+      pano.setPosition(randomKoreaLatLng());
+    }
+    function startGuessing(){
+      phase="GUESSING";
+      act.textContent="📍 여기 찍기"; act.disabled=true; // 지도 클릭 전엔 잠금
+    }
+    function reveal(){
+      if(!guessLatLng) return;
+      var km = haversineKm(guessLatLng, answerCoord);
+      var sc = scoreFor(km);
+      total += sc;
+      var loc = pano.getLocation();
+      var where = loc.address || loc.title || "주소 정보 없음";
+      results.push({ km:km, score:sc, where:where });
+
+      answerMarker = labelMarker(answerCoord, "정답", "#e11d48");
+      if(!guessMarker) guessMarker = labelMarker(guessLatLng, "내 추측", "#2563eb");
+      line = new naver.maps.Polyline({ map:guessMap, path:[guessLatLng, answerCoord],
+        strokeColor:"#e11d48", strokeWeight:3, strokeStyle:"shortdash" });
+      guessMap.fitBounds(new naver.maps.LatLngBounds(guessLatLng, answerCoord));
+
+      scorePill.textContent = "총점 "+fmtNum(total);
+      msg.style.background = "#27ae60";
+      msg.textContent = "📏 "+fmtDist(km)+" · ⭐ "+fmtNum(sc)+"점 · "+where;
+      msg.style.display = "block";
+
+      phase="REVEALED";
+      act.disabled=false;
+      act.textContent = (round >= ROUNDS_TOTAL) ? "🏁 최종 결과" : "다음 라운드 →";
+    }
+    function nextRound(){
+      round++;
+      if(round > ROUNDS_TOTAL){ showFinal(); return; }
+      beginSearch();
+    }
+    function showFinal(){
+      document.getElementById("finalTotal").textContent = fmtNum(total)+" 점";
+      var ul = document.getElementById("finalList"); ul.innerHTML="";
+      results.forEach(function(r,i){
+        var li=document.createElement("li");
+        li.innerHTML = "<b>R"+(i+1)+"</b> <span>"+fmtNum(r.score)+"점 "+
+                       "<span class='d'>("+fmtDist(r.km)+")</span></span>";
+        ul.appendChild(li);
+      });
+      document.getElementById("final").style.display="flex";
+    }
+    function startGame(){
+      round=0; total=0; results=[];
+      scorePill.textContent="총점 0";
+      document.getElementById("final").style.display="none";
+      nextRound();
+    }
+
+    naver.maps.Event.addListener(pano, "pano_status", function(status){
+      if(phase!=="SEARCHING") return;
+      if(status==="OK"){ answerCoord = pano.getLocation().coord; startGuessing(); }
+      else if(tries < TRIES_MAX){ tryFind(); }
+      else {
+        msg.style.background="#e67e22";
+        msg.textContent="😅 이 판은 거리뷰를 못 찾았어요. 다시 시도를 눌러주세요.";
+        msg.style.display="block";
+        phase="RETRY"; act.disabled=false; act.textContent="🎲 다시 시도";
+      }
+    });
+
+    naver.maps.Event.addListener(guessMap, "click", function(e){
+      if(phase!=="GUESSING") return;
+      guessLatLng = e.coord;
+      if(guessMarker) guessMarker.setPosition(guessLatLng);
+      else guessMarker = labelMarker(guessLatLng, "내 추측", "#2563eb");
+      act.disabled=false;
+    });
+
+    act.addEventListener("click", function(){
+      if(phase==="GUESSING") reveal();
+      else if(phase==="REVEALED") nextRound();
+      else if(phase==="RETRY") beginSearch();
+    });
+
+    // 지도 크게/작게 (모바일에서 정확히 찍기 좋게)
+    document.getElementById("expandBtn").addEventListener("click", function(){
+      var p=document.getElementById("panel"); p.classList.toggle("big");
+      this.textContent = p.classList.contains("big") ? "⤡ 작게" : "⤢ 크게";
+      setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 220);
+    });
+
+    document.getElementById("againBtn").addEventListener("click", startGame);
+
+    startGame();
+  </script>
+</body>
+</html>
